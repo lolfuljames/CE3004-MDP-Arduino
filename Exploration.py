@@ -454,7 +454,28 @@ class Exploration:
 		sensors = ''
 		sensors = obstacles
 		if not self.rpi:
-			sensors = self.getObstacles()
+			simMap = self.createSimMap()
+			obStr = ''
+			for i in range(6):
+				sensor = False
+				for j in range(3):
+					coords1 = self.getSensorCoordinates(i,j)
+					if coords1[0]>=0 and coords1[0] <MAX_ROW and coords1[1]>=0 and coords1[1]<MAX_COL:
+						if simMap[coords1[0],coords1[1]]==1:
+							obStr+=str(j)
+							sensor = True
+							break
+					elif coords1[0]==-1 or coords1[0]==MAX_ROW and coords1[1]>=1 and coords1[1]<MAX_COL:
+						obStr+=str(j)
+						sensor = True
+						break
+					elif coords1[1]==-1 or coords1[1]==MAX_COL and coords1[0]>=0 and coords1[0]<MAX_ROW :
+						obStr+=str(j)
+						sensor = True
+						break
+				if not sensor:
+					obStr+='9'
+			sensors = obStr
 		if self.phase==1:
 			i = 0
 			for obs in sensors:
@@ -523,30 +544,6 @@ class Exploration:
 					if self.valExplored([coords]):
 						self.setExplored(coords)
 				i+=1
-	def getObstacles(self):
-		simMap = self.createSimMap()
-		obStr = ''
-		for i in range(6):
-			sensor = False
-			for j in range(3):
-				coords1 = self.getSensorCoordinates(i,j)
-				if coords1[0]>=0 and coords1[0] <MAX_ROW and coords1[1]>=0 and coords1[1]<MAX_COL:
-					if simMap[coords1[0],coords1[1]]==1:
-						obStr+=str(j)
-						sensor = True
-						break
-				elif coords1[0]==-1 or coords1[0]==MAX_ROW and coords1[1]>=1 and coords1[1]<MAX_COL:
-					obStr+=str(j)
-					sensor = True
-					break
-				elif coords1[1]==-1 or coords1[1]==MAX_COL and coords1[0]>=0 and coords1[0]<MAX_ROW :
-					obStr+=str(j)
-					sensor = True
-					break
-			if not sensor:
-				obStr+='9'
-		return obStr
-	# @run_once
 	def createSimMap(self):
 		simMap = np.zeros([MAX_ROW,MAX_COL],dtype=int)
 		exploredMap = ''
@@ -816,11 +813,13 @@ class Exploration:
 		self.steps = 0
 	def explore_(self):
 		self.start()
-		if self.visited[18][1]>1:
+		if self.visited[18][1]>1 and self.phase==1:
 			self.phase = 2
+		if self.explored==100 and (self.phase==1 or self.phase==2):
+			self.phase = 3
 		if time.time() >= self.endTime:
 			return True
-		if self.explored==100 and self.checkGoalExplored() or time.time() >= self.userTime and self.checkGoalExplored():
+		if self.explored==100 and self.checkGoalExplored() and self.phase==4 or time.time() >= self.userTime and self.checkGoalExplored():
 			if self.explored==100:
 				self.update = False
 			if self.current[0] == START[0] and self.current[1] == START[1]:
@@ -836,8 +835,8 @@ class Exploration:
 						self.mv(LEFT)
 						self.previousMvmt = LEFT+"C"
 				elif self.calib==1:
-					self.mv(RIGHT)
-					self.previousMvmt = RIGHT+"C"
+					self.mv("U")
+					self.previousMvmt = "U"
 					self.calib=2
 				elif self.calib==2:
 						exploredMap = self.currentMap.copy()
@@ -884,31 +883,38 @@ class Exploration:
 				return
 			else:
 				self.finished()
-				try:
-					if self.path[0][0]!='S':
-						move = self.path[0]
-						self.path.pop(0)
-						self.mv(move)
-					else:
-						if len(self.path[0])>2:
-							steps = int(self.path[0][2])
-							steps-=1
-							if steps==0:
-								self.path[0]='S'+str(9)	
-							else:
-								self.path[0][2] = str(steps)
-							self.mv(FRWD)
+				if self.rpi:
+					mvmtstr = ""
+					for mvmt in self.path:
+						mvmtstr += str(mvmt)
+					self.previousMvmt=mvmtstr
+					return
+				else:
+					try:
+						if self.path[0][0]!='S':
+							move = self.path[0]
+							self.path.pop(0)
+							self.mv(move)
 						else:
-							steps = int(self.path[0][1])
-							steps-=1						
-							self.path[0] = 'S'+str(steps)
-							if steps==0:
-								self.path.pop(0)
-							self.mv(FRWD)
-					time.sleep(self.stepTime)
-					return
-				except:
-					return
+							if len(self.path[0])>2:
+								steps = int(self.path[0][2])
+								steps-=1
+								if steps==0:
+									self.path[0]='S'+str(9)	
+								else:
+									self.path[0][2] = str(steps)
+								self.mv(FRWD)
+							else:
+								steps = int(self.path[0][1])
+								steps-=1						
+								self.path[0] = 'S'+str(steps)
+								if steps==0:
+									self.path.pop(0)
+								self.mv(FRWD)
+						time.sleep(self.stepTime)
+						return
+					except:
+						return
 		else:
 			if self.phase==1:
 				if self.steps>30:
@@ -930,6 +936,8 @@ class Exploration:
 						self.stepCounter = 0
 						move = "U"
 						self.mv(move)
+						if self.path[0][0]=='R':
+							self.path.pop(0)
 						return
 					elif self.checkLeftObstacles(self.direction) and not self.checkFront(self.direction) and self.stepCounter>=2:
 						self.stepCounter = 0
@@ -965,6 +973,47 @@ class Exploration:
 					else:
 						self.currentMap[GOAL[0]][GOAL[1]]=0
 						self.explore_()
+				return
+			elif self.phase==3:
+				self.getObstacles()
+				if self.goto or self.path:
+					if self.checkLeftObstacles(self.direction) and self.checkFrontObstacles(self.direction) and self.stepCounter>1:
+						self.stepCounter = 0
+						move = "U"
+						self.mv(move)
+						if self.path[0][0]=='R':
+							self.path.pop(0)
+						return
+					elif self.checkLeftObstacles(self.direction) and not self.checkFront(self.direction) and self.stepCounter>=2:
+						self.stepCounter = 0
+						move = "C"
+						self.mv(move)
+						return
+					elif self.checkLeftObstacles(self.direction) and self.stepCounter>=7:
+						self.stepCounter = 0
+						move = "C"
+						self.mv(move)
+						return
+					if self.path:
+						if self.path[0][0]!='S':
+							move = self.path.pop(0)
+							self.mv(move)
+						else:
+							steps = int(self.path[0][1])
+							steps-=1						
+							self.path[0] = 'S'+str(steps)
+							if steps==0:
+								self.path.pop(0)
+							self.mv(FRWD)
+					else:
+						self.getArrowPath()	
+						self.goto.pop(0)
+						self.explore_()
+					time.sleep(self.stepTime)
+					self.stepCounter+=1
+				else:
+					self.phase = 4
+					self.explore_()
 				return
 	def valPath(self, robotPos):
 		for (r, c) in robotPos:
@@ -1155,6 +1204,94 @@ class Exploration:
 			for c in range(MAX_COL):
 				if self.currentMap[19-r][c]==0:
 					self.goto.append((19-r,c))
+	def lookLeft(self,arrowPos,direction,north,south,east,west):
+		if arrowPos==north:	
+			if direction==N:
+				self.path.append(LEFT)
+			elif direction==E:
+				self.path.append(TURNA)
+			elif direction==S:
+				self.path.append(RIGHT)
+		elif arrowPos==south:
+			if direction==N:
+				self.path.append(RIGHT)
+			elif direction==W:
+				self.path.append(TURNA)
+			elif direction==S:
+				self.path.append(LEFT)
+		elif arrowPos==east:
+			if direction==W:
+				self.path.append(RIGHT)
+			elif direction==E:
+				self.path.append(LEFT)
+			elif direction==S:
+				self.path.append(TURNA)
+		elif arrowPos==west:
+			if direction==N:
+				self.path.append(TURNA)
+			elif direction==E:
+				self.path.append(RIGHT)
+			elif direction==W:
+				self.path.append(LEFT)
+	def getArrowPath(self):
+		arrowPos = []
+		r = self.goto[0][0]
+		c = self.goto[0][1]
+		north = (r-2,c)
+		south = (r+2,c)
+		east = (r,c+2)
+		west = (r,c-2)
+		neighbors = self.getNeighbors(north)
+		isObs = False
+		for n in neighbors:
+			if self.valExplored([n]) and not self.currentMap[n[0]][n[1]]==1:
+				isObs = True
+		if not isObs and self.valPath([north]) and self.visited[north[0]][north[1]]==0:
+			arrowPos.append(north)
+		neighbors = self.getNeighbors(south)
+		isObs = False
+		for n in neighbors:
+			if self.valExplored([n]) and not self.currentMap[n[0]][n[1]]==1:
+				isObs = True
+		if not isObs and self.valPath([south]) and self.visited[south[0]][south[1]]==0:
+			arrowPos.append(south)
+		neighbors = self.getNeighbors(east)
+		isObs = False
+		for n in neighbors:
+			if self.valExplored([n]) and not self.currentMap[n[0]][n[1]]==1:
+				isObs = True
+		if not isObs and self.valPath([east]) and self.visited[east[0]][east[1]]==0:
+			arrowPos.append(east)
+		neighbors = self.getNeighbors(west)
+		isObs = False
+		for n in neighbors:
+			if self.valExplored([n]) and not self.currentMap[n[0]][n[1]]==1:
+				isObs = True
+		if not isObs and self.valPath([west]) and self.visited[west[0]][west[1]]==0:
+			arrowPos.append(west)
+		exploredMap = self.currentMap.copy()
+		for r in range(MAX_ROW):
+			for c in range(MAX_COL):
+				if exploredMap[r][c]>0:
+					exploredMap[r][c] = exploredMap[r][c]-1
+		try:
+			sp = ShortestPathRB(exploredMap,(self.current[0],self.current[1]),(arrowPos[0]),self.direction)
+			self.path = sp.ActionSequence((self.current[0],self.current[1]),(arrowPos[0]),self.direction)
+			self.lookLeft(arrowPos[0],sp.Dir,north,south,east,west)
+			if len(arrowPos)>1:
+				j = 1
+				for i in range(len(arrowPos-1)):
+					self.path.append(sp.ActionSequence((arrowPos[j-1]),(arrowPos[j]),self.direction))
+					self.lookLeft(arrowPos[j],sp.Dir,north,south,east,west)
+		except:
+			logging.info("KeyError/ No Arrow Position")
+	@run_once
+	def getObstacles(self):
+		self.goto = []
+		for r in range(MAX_ROW):
+			for c in range(MAX_COL):
+				if self.currentMap[19-r][c]==2:
+					self.goto.append((19-r,c))
 	@run_once
 	def finished(self):
 		self.clearObstacles(self.waypoint)
@@ -1167,3 +1304,6 @@ class Exploration:
 					exploredMap[r][c] = exploredMap[r][c]-1
 		sp = ShortestPathRB(exploredMap,(self.current[0],self.current[1]),(START[0],START[1]),self.direction)
 		self.path = sp.ActionSequence((self.current[0],self.current[1]),(START[0],START[1]), self.direction)
+		if self.rpi:
+			self.current = [18,1]
+			self.direction=sp.Dir
